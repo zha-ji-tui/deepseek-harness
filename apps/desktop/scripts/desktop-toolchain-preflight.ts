@@ -68,6 +68,19 @@ async function probeWindowsInstallerToolchain(environment: NodeJS.ProcessEnv): P
   return failures
 }
 
+async function probeDebToolchain(): Promise<DesktopToolchainProbeFailure[]> {
+  const failures: DesktopToolchainProbeFailure[] = []
+  for (const tool of ['dpkg-deb', 'fakeroot']) {
+    try {
+      await run(tool, ['--version'], { timeout: 20_000 })
+    }
+    catch (error) {
+      failures.push({ tool, detail: error instanceof Error ? error.message : String(error) })
+    }
+  }
+  return failures
+}
+
 /**
  * Probe every external tool one packaging run needs.
  * @param platform - Target platform; a Windows target already requires a Windows build host.
@@ -75,13 +88,14 @@ async function probeWindowsInstallerToolchain(environment: NodeJS.ProcessEnv): P
  * @returns Every probe that failed, empty when the host can run the packaging sequence.
  */
 export async function probeDesktopToolchain(
-  platform: 'darwin' | 'win32',
+  platform: 'darwin' | 'win32' | 'linux',
   environment: NodeJS.ProcessEnv = process.env,
 ): Promise<readonly DesktopToolchainProbeFailure[]> {
   const failures: DesktopToolchainProbeFailure[] = []
   const tar = await probeTar()
   if (tar !== undefined) failures.push({ tool: 'tar', detail: tar })
   if (platform === 'win32') failures.push(...await probeWindowsInstallerToolchain(environment))
+  if (platform === 'linux') failures.push(...await probeDebToolchain())
   return failures
 }
 
@@ -92,7 +106,7 @@ export async function probeDesktopToolchain(
  * @returns Resolves when every probe passes.
  */
 export async function requireDesktopToolchain(
-  platform: 'darwin' | 'win32',
+  platform: 'darwin' | 'win32' | 'linux',
   environment: NodeJS.ProcessEnv = process.env,
 ): Promise<void> {
   const failures = await probeDesktopToolchain(platform, environment)

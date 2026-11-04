@@ -1,0 +1,84 @@
+name: Package Desktop · Linux · x64
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - ci/linux-deb
+
+permissions:
+  contents: read
+
+concurrency:
+  group: linux-desktop-package
+  cancel-in-progress: false
+
+jobs:
+  package:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 240
+    defaults:
+      run:
+        shell: bash
+    env:
+      DSH_TELEMETRY_DISABLED: '1'
+      NODE_OPTIONS: --max-old-space-size=8192
+    steps:
+      - name: Free disk space
+        run: |
+          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc /opt/hostedtoolcache/CodeQL
+          df -h /
+
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - uses: pnpm/action-setup@v4
+        with:
+          run_install: false
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: pnpm
+
+      - name: Install Electron runtime libraries and deb tooling
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            libgtk-3-0 libnss3 libasound2t64 libgbm1 libxss1 xvfb \
+            fakeroot dpkg build-essential python3
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Build and package deb
+        run: pnpm --dir apps/desktop run package:linux:x64
+
+      - name: List artifacts
+        run: ls -lh apps/desktop/.desktop-build/targets/linux-x64/unsigned-artifacts/
+
+      - name: Upload deb
+        uses: actions/upload-artifact@v4
+        with:
+          name: deepseek-harness-linux-x64-deb
+          path: apps/desktop/.desktop-build/targets/linux-x64/unsigned-artifacts/*.deb
+          if-no-files-found: error
+          retention-days: 90
+
+      - name: Upload AppImage
+        uses: actions/upload-artifact@v4
+        with:
+          name: deepseek-harness-linux-x64-appimage
+          path: apps/desktop/.desktop-build/targets/linux-x64/unsigned-artifacts/*.AppImage
+          if-no-files-found: ignore
+          retention-days: 90
+
+      - name: Upload packaging diagnostics
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: linux-package-diagnostics
+          path: apps/desktop/.desktop-build/packaging-runs/**/events.jsonl
+          if-no-files-found: ignore
+          retention-days: 14
