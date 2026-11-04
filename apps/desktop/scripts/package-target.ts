@@ -48,18 +48,25 @@ const DESKTOP_UPLOAD_CREDENTIAL_ENV_NAMES = new Set([
 const AUTOMATIC_BUILD_VERSION = 'auto'
 
 /** Fixed platform and architecture identifiers exposed by package scripts. */
-export type DesktopPackageTargetName = 'mac-arm64' | 'mac-x64' | 'win-x64' | 'linux-x64'
+export type DesktopPackageTargetName = 'mac-arm64' | 'mac-x64' | 'win-x64'
 
-/** One supported release target and its electron-builder selectors. */
-export interface DesktopPackageTarget {
-  readonly name: DesktopPackageTargetName
-  readonly platform: 'darwin' | 'win32' | 'linux'
+/** Packaging targets, including the local-only Linux deb that has no update feed. */
+export type DesktopBuildTargetName = DesktopPackageTargetName | 'linux-x64'
+
+/** Selectors every target shares with electron-builder. */
+interface DesktopPackageTargetShape {
   readonly arch: 'arm64' | 'x64'
   readonly builderPlatform: '--mac' | '--win' | '--linux'
   readonly builderArch: '--arm64' | '--x64'
 }
 
-const TARGETS: Record<DesktopPackageTargetName, DesktopPackageTarget> = {
+/** One supported release target; Linux never publishes or updates. */
+export type DesktopPackageTarget = DesktopPackageTargetShape & (
+  | { readonly name: DesktopPackageTargetName; readonly platform: 'darwin' | 'win32' }
+  | { readonly name: 'linux-x64'; readonly platform: 'linux' }
+)
+
+const TARGETS: Record<DesktopBuildTargetName, DesktopPackageTarget> = {
   'mac-arm64': {
     name: 'mac-arm64',
     platform: 'darwin',
@@ -129,7 +136,7 @@ export function withoutDesktopUploadCredentials(environment: NodeJS.ProcessEnv):
     .filter(([name]) => !DESKTOP_UPLOAD_CREDENTIAL_ENV_NAMES.has(name)))
 }
 
-function isTargetName(value: string): value is DesktopPackageTargetName {
+function isTargetName(value: string): value is DesktopBuildTargetName {
   return Object.hasOwn(TARGETS, value)
 }
 
@@ -146,6 +153,7 @@ function writeReleaseRecord(
   environment: NodeJS.ProcessEnv,
   artifactsRoot: string,
 ): void {
+  if (target.platform === 'linux') throw new Error('desktop package: linux builds have no release record')
   const desktopVersion = packageVersion(join(APP_ROOT, 'package.json'), 'desktop package')
   const dshVersion = packageVersion(join(REPOSITORY_ROOT, 'package.json'), 'dsh package')
   if (desktopVersion !== dshVersion) {
@@ -214,7 +222,7 @@ interface DesktopPackageInvocation {
   readonly requestedBuildVersion: string | undefined
 }
 
-function hostTargetName(platform: NodeJS.Platform, arch: string): DesktopPackageTargetName {
+function hostTargetName(platform: NodeJS.Platform, arch: string): DesktopBuildTargetName {
   const name = `${platform === 'darwin' ? 'mac' : platform === 'win32' ? 'win' : platform}-${arch}`
   if (!isTargetName(name)) throw new Error(`desktop package: unsupported build host ${platform}-${arch}`)
   return name

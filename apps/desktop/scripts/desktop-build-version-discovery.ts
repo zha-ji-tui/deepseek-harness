@@ -36,7 +36,7 @@ const ARTIFACT = /(?:^|\/)deepseek-harness-(?<version>.+)-(?:mac|win)-(?:arm64|x
 /** Inputs that decide which versions are already taken. */
 export interface DesktopBuildVersionSuggestionOptions {
   readonly productVersion: string
-  readonly target: DesktopPackageTargetName
+  readonly target: DesktopPackageTargetName | 'linux-x64'
   readonly environment: NodeJS.ProcessEnv
   /** Date segment to number within; defaults to today where the build runs. */
   readonly date?: string
