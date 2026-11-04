@@ -113,6 +113,8 @@ export function createElectronBuilderConfig(
     extraMetadata: {
       dshDesktopAppId: appId,
       dshDesktopUpdateChannel: update?.channel ?? 'nightly',
+      // deb metadata reads the packaged manifest, which ships no homepage of its own.
+      ...(resolvedPlatform === 'linux' ? { homepage: 'https://deepseek-harness.github.io/deepseek-harness/' } : {}),
       ...(policy === undefined ? {} : { dshMandatoryUpdatePolicy: policy }),
       ...buildVersion === productVersion ? {} : { version: buildVersion },
       ...packaged === undefined ? {} : { dshBuildCommit: packaged.commit, dshBuildDirty: packaged.dirty },
