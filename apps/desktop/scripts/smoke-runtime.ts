@@ -19,10 +19,12 @@ import type { DesktopRuntimeDescriptor } from '../src/runtime-tree.ts'
  * @param runtime - Verified resource descriptor.
  * @param environment - Credential-scrubbed build environment and private native cache.
  * @param resourcesRuntime - Bundled interpreters outside the application archive.
+ * @param options - Office conversion runs only where a native engine is published; Linux has none.
  * @returns Resolves after checks and teardown; rejects on a check or teardown failure.
  */
 export async function smokeDesktopRuntime(
   root: string, node: string, runtime: DesktopRuntimeDescriptor, environment: NodeJS.ProcessEnv, resourcesRuntime: string,
+  options: { office?: boolean } = {},
 ): Promise<void> {
   const home = mkdtempSync(join(tmpdir(), 'dsh-desktop-smoke-'))
   const profile = join(home, 'profiles', 'desktop')
@@ -70,37 +72,24 @@ export function apply(ctx) {
     await runCli(['remove', installedName])
     if (existsSync(installedEntry)) throw new Error('desktop runtime: CLI did not remove the local plugin')
     console.log('desktop runtime: CLI offline plugin installation and removal passed')
-    const primary = join(resourcesRuntime, 'primary-runtime')
-    const dependencies = workspaceDependencyPaths(primary, await readPrimaryRuntime(primary))
-    await promisify(execFile)(dependencies.python, ['-I', '-B',
-      fileURLToPath(new URL('../tests/fixtures/office-conversion-inputs.py', import.meta.url)), home],
-    { env: environment, timeout: 120_000, windowsHide: true })
-    const inputs = ['docx', 'xlsx', 'pptx'].map(extension => ({ extension,
-      bytes: readFileSync(join(home, `input.${extension}`)).toString('base64') }))
+    const office = options.office !== false
+    const inputs: Array<{ extension: string, bytes: string }> = []
+    if (office) {
+      const primary = join(resourcesRuntime, 'primary-runtime')
+      const dependencies = workspaceDependencyPaths(primary, await readPrimaryRuntime(primary))
+      await promisify(execFile)(dependencies.python, ['-I', '-B',
+        fileURLToPath(new URL('../tests/fixtures/office-conversion-inputs.py', import.meta.url)), home],
+      { env: environment, timeout: 120_000, windowsHide: true })
+      inputs.push(...['docx', 'xlsx', 'pptx'].map(extension => ({ extension,
+        bytes: readFileSync(join(home, `input.${extension}`)).toString('base64') })))
+    }
     const cordis = runtime.sharedPackages.find(entry => entry.name === '@deepseek-ai/cordis')
     if (cordis === undefined) throw new Error('desktop runtime: missing shared Cordis package')
     writeFileSync(join(plugin, 'package.json'), JSON.stringify({
       name: pluginName, version: '1.0.0', type: 'module', exports: './index.js',
       peerDependencies: { '@deepseek-ai/cordis': cordis.version }, dsh: { bundle: { patch: './bundle.yml' } },
     }))
-    writeFileSync(join(plugin, 'index.js'), `
-import { Context } from '@deepseek-ai/cordis'
-import { inspect, promisify } from 'node:util'
-import { execFile } from 'node:child_process'
-import { readFile } from 'node:fs/promises'
-export function apply(ctx) {
-  if (!(ctx instanceof Context)) throw new Error('desktop runtime: external plugin loaded another Cordis instance')
-  ctx.effect(() => ctx.webServer.register({ kind: 'exact', path: '/desktop-smoke',
-    handler(_request, response) { response.end('plugin route ready') } }))
-  ctx.effect(() => ctx.webServer.register({ kind: 'exact', path: '/desktop-smoke-install',
-    async handler(_request, response) {
-      try {
-        response.end(JSON.stringify(await ctx.pluginManager.installBundle(${JSON.stringify(installedPlugin)})))
-      } catch (error) {
-        response.statusCode = 500
-        response.end(inspect(error, { depth: 5 }))
-      }
-    } }))
+    const officeRoutes = office ? `
   ctx.effect(() => ctx.webServer.register({ kind: 'exact', path: '/desktop-smoke-office-cli',
     async handler(_request, response) {
       try {
@@ -133,9 +122,28 @@ export function apply(ctx) {
         }
       } }))
   }
-}
+` : ''
+    writeFileSync(join(plugin, 'index.js'), `
+import { Context } from '@deepseek-ai/cordis'
+import { inspect, promisify } from 'node:util'
+import { execFile } from 'node:child_process'
+import { readFile } from 'node:fs/promises'
+export function apply(ctx) {
+  if (!(ctx instanceof Context)) throw new Error('desktop runtime: external plugin loaded another Cordis instance')
+  ctx.effect(() => ctx.webServer.register({ kind: 'exact', path: '/desktop-smoke',
+    handler(_request, response) { response.end('plugin route ready') } }))
+  ctx.effect(() => ctx.webServer.register({ kind: 'exact', path: '/desktop-smoke-install',
+    async handler(_request, response) {
+      try {
+        response.end(JSON.stringify(await ctx.pluginManager.installBundle(${JSON.stringify(installedPlugin)})))
+      } catch (error) {
+        response.statusCode = 500
+        response.end(inspect(error, { depth: 5 }))
+      }
+    } }))
+${officeRoutes}}
 `)
-    writeFileSync(join(plugin, 'bundle.yml'), '- insert:\n    - id: desktop-runtime-smoke-plugin\n      name: desktop-runtime-smoke-plugin\n      inject: [webServer, officeToPdf, skills, pluginManager]\n')
+    writeFileSync(join(plugin, 'bundle.yml'), `- insert:\n    - id: desktop-runtime-smoke-plugin\n      name: desktop-runtime-smoke-plugin\n      inject: [${office ? 'webServer, officeToPdf, skills, pluginManager' : 'webServer, pluginManager'}]\n`)
     cpSync(plugin, join(profile, 'node_modules', pluginName), { recursive: true })
     const manifest = JSON.parse(readFileSync(join(profile, 'package.json'), 'utf8')) as {
       dependencies?: Record<string, string>
@@ -165,26 +173,30 @@ export function apply(ctx) {
     if (!installation.ok || !installed.ok || await installed.text() !== 'installed plugin ready') {
       throw new Error(`desktop runtime: bundled pnpm plugin installation failed: ${installationResult}`)
     }
-    for (const { extension } of inputs) {
-      const converted = await fetch(new URL(`/desktop-smoke-office/${extension}`, ready.url), {
+    if (office) {
+      for (const { extension } of inputs) {
+        const converted = await fetch(new URL(`/desktop-smoke-office/${extension}`, ready.url), {
+          headers: { cookie }, signal: AbortSignal.timeout(120_000),
+        })
+        if (!converted.ok) throw new Error(`desktop runtime: ${extension} conversion failed: ${await converted.text()}`)
+        const pdf = Buffer.from(await converted.arrayBuffer())
+        if (!/^%PDF-\d\.\d/u.test(pdf.subarray(0, 8).toString())
+          || !pdf.subarray(-1024).toString().trimEnd().endsWith('%%EOF')) {
+          throw new Error(`desktop runtime: invalid ${extension} PDF output`)
+        }
+      }
+      const cliResponse = await fetch(new URL('/desktop-smoke-office-cli', ready.url), {
         headers: { cookie }, signal: AbortSignal.timeout(120_000),
       })
-      if (!converted.ok) throw new Error(`desktop runtime: ${extension} conversion failed: ${await converted.text()}`)
-      const pdf = Buffer.from(await converted.arrayBuffer())
-      if (!/^%PDF-\d\.\d/u.test(pdf.subarray(0, 8).toString())
-        || !pdf.subarray(-1024).toString().trimEnd().endsWith('%%EOF')) {
-        throw new Error(`desktop runtime: invalid ${extension} PDF output`)
+      if (!cliResponse.ok) throw new Error(`desktop runtime: skill CLI failed: ${await cliResponse.text()}`)
+      const cliResult = await cliResponse.json() as { capabilities: { runtime: { cliPath: string } }; pdf: string }
+      if (!cliResult.capabilities.runtime.cliPath.endsWith('cli.js') || Buffer.from(cliResult.pdf, 'base64').subarray(0, 5).toString() !== '%PDF-') {
+        throw new Error('desktop runtime: skill CLI did not return capabilities and a PDF')
       }
+      console.log('desktop runtime: DOCX, XLSX, PPTX to PDF and skill CLI discovery passed')
+    } else {
+      console.log('desktop runtime: Office conversion smoke skipped; no native engine is published for this target')
     }
-    const cliResponse = await fetch(new URL('/desktop-smoke-office-cli', ready.url), {
-      headers: { cookie }, signal: AbortSignal.timeout(120_000),
-    })
-    if (!cliResponse.ok) throw new Error(`desktop runtime: skill CLI failed: ${await cliResponse.text()}`)
-    const cliResult = await cliResponse.json() as { capabilities: { runtime: { cliPath: string } }; pdf: string }
-    if (!cliResult.capabilities.runtime.cliPath.endsWith('cli.js') || Buffer.from(cliResult.pdf, 'base64').subarray(0, 5).toString() !== '%PDF-') {
-      throw new Error('desktop runtime: skill CLI did not return capabilities and a PDF')
-    }
-    console.log('desktop runtime: DOCX, XLSX, PPTX to PDF and skill CLI discovery passed')
   } finally {
     clearTimeout(timer)
     try { await host.stop() } finally {

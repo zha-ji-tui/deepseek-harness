@@ -21,6 +21,7 @@ import { verifyRuntimeArchive } from './verify-runtime-archive.ts'
  */
 export async function smokePreparedRuntime(
   root: string, node: string, resourcesRuntime: string, descriptor: DesktopRuntimeDescriptor,
+  options: { office?: boolean } = {},
 ): Promise<void> {
   const cache = await mkdtemp(join(tmpdir(), 'desktop-native-smoke-'))
   const environment = { ...scrubWindowsSigningEnvironment(process.env), NODE_OPTIONS: '',
@@ -42,7 +43,7 @@ export async function smokePreparedRuntime(
       throw error
     })
     process.stdout.write(stdout)
-    await smokeDesktopRuntime(root, node, descriptor, environment, resourcesRuntime)
+    await smokeDesktopRuntime(root, node, descriptor, environment, resourcesRuntime, options)
   } finally {
     await rm(cache, { recursive: true, force: true })
   }
