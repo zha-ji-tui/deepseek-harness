@@ -58,6 +58,14 @@ jobs:
       - name: List artifacts
         run: ls -lh apps/desktop/.desktop-build/targets/linux-x64/unsigned-artifacts/
 
+      - name: Inspect Office engine packages
+        if: always()
+        run: |
+          echo "--- prepared dsh tree"
+          ls apps/desktop/.desktop-build/targets/linux-x64/dsh/node_modules/@deepseek-ai 2>/dev/null | grep libreoffice || true
+          echo "--- unpacked app"
+          ls apps/desktop/.desktop-build/targets/linux-x64/unsigned-artifacts/linux-unpacked/resources/app.asar.unpacked/dsh/node_modules/@deepseek-ai 2>/dev/null | grep libreoffice || true
+
       - name: Upload deb
         uses: actions/upload-artifact@v4
         with:

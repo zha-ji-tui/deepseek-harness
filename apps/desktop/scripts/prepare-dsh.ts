@@ -4,7 +4,7 @@ import { resolveMacOSSignatureCacheDirectory } from './macos-signature-cache-dir
 import { packagingStep } from './packaging-step.mjs'
 import { spawn } from 'node:child_process'
 import { createHash } from 'node:crypto'
-import { copyFileSync, cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
+import { copyFileSync, cpSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { delimiter, join, relative, resolve } from 'node:path'
 import { desktopNodeEnvironment } from '../src/node-environment.ts'
@@ -152,6 +152,14 @@ async function main(): Promise<void> {
         filter: source => desktopRuntimeFileExclusion(relative(modules, source), target, officeEngine) === undefined,
       })
     })
+    // The kit probes for a Linux native engine directory and refuses its WASM fallback when any stub
+    // remains, but no Linux native engine is published; drop leftovers before packaging.
+    const officeScope = join(DSH_OUTPUT_ROOT, 'node_modules', '@deepseek-ai')
+    if (existsSync(officeScope)) {
+      for (const entry of readdirSync(officeScope)) {
+        if (entry.startsWith('libreoffice-kit-linux-')) rmSync(join(officeScope, entry), { recursive: true, force: true })
+      }
+    }
     writeFileSync(join(DSH_OUTPUT_ROOT, 'package.json'), `${JSON.stringify({
       name: '@deepseek-ai/dsh-desktop-runtime', private: true, version: release.version, type: 'module',
       dependencies: Object.fromEntries(packageSet.packages.map(entry => [entry.name, entry.version])),
