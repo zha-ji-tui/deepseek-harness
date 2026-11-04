@@ -438,7 +438,8 @@ export async function packageTarget(
     ?? (target.platform === 'win32' ? resolveWindowsPackageSettings(environment).packConcurrency : 4)
   const packArguments = ['--concurrency', String(packConcurrency)]
   const buildPaths = desktopTargetBuildPaths(target.name, environment)
-  const releaseRecordPath = join(buildPaths.artifacts, desktopBuildRecordFilename(target.name))
+  const releaseRecordPath = join(buildPaths.artifacts,
+    target.platform === 'linux' ? `${target.name}-release.json` : desktopBuildRecordFilename(target.name))
   if (!invocation.prepareOnly && !invocation.unsigned && !invocation.skipNotarization) {
     rmSync(releaseRecordPath, { force: true })
     rmSync(`${releaseRecordPath}.tmp`, { force: true })
